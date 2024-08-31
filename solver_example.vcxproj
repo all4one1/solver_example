@@ -77,7 +77,22 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CudaCompile Include="kernel.cu" />
+    <CudaCompile Include="main.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="CudaIterSolver\CudaReduction\CuReduction.h" />
+    <ClInclude Include="CudaIterSolver\CuSolver.h" />
+    <ClInclude Include="CPUsolver.h" />
+    <ClInclude Include="Extras.h" />
+    <ClInclude Include="FromOuterSparse\SparseMatrix.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="CudaIterSolver\CudaReduction\CuReduction.cpp" />
+    <CudaCompile Include="CudaIterSolver\CuSolver.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="FromOuterSparse\SparseMatrix.cpp" />
+    <ClCompile Include="FromOuterSparse\SparseMatrix2.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
