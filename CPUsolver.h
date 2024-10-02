@@ -12,7 +12,7 @@ using std::ofstream;
 struct IterativeSolver
 {
 	int k = 0, write_i = 0, limit = 1000;
-	double eps_iter = 1e-4;
+	double eps_iter = 1e-6;
 	ofstream w;
 	IterativeSolver()
 	{
@@ -59,7 +59,7 @@ struct IterativeSolver
 	void solveJacobi(double* f, double* f0, double* bb, int NN, SparseMatrix& M)
 	{
 		k = 0;
-		for (k = 0; k < 20000; k++)
+		for (k = 0; k < 100000; k++)
 		{
 			double s = 0;
 			for (int j = 0; j < NN; j++)

@@ -1,0 +1,46 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CudaCompile Include="main.cu" />
+    <CudaCompile Include="CudaIterSolver\CudaReduction\CuReduction.cpp">
+      <Filter>Cuda</Filter>
+    </CudaCompile>
+    <CudaCompile Include="CudaIterSolver\CuSolver.cpp">
+      <Filter>Cuda</Filter>
+    </CudaCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="FromOuterSparse\SparseMatrix.cpp">
+      <Filter>Sparse</Filter>
+    </ClCompile>
+    <ClCompile Include="FromOuterSparse\SparseMatrix2.cpp">
+      <Filter>Sparse</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="CPUsolver.h" />
+    <ClInclude Include="Extras.h" />
+    <ClInclude Include="CG.h" />
+    <ClInclude Include="FromOuterSparse\SparseMatrix.h">
+      <Filter>Sparse</Filter>
+    </ClInclude>
+    <ClInclude Include="CudaIterSolver\CudaReduction\CuReduction.h">
+      <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="CudaIterSolver\CuSolver.h">
+      <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="TEST.h">
+      <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="Header.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Sparse">
+      <UniqueIdentifier>{4c1b5939-2cff-4d01-9554-fcf25dc60fe4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Cuda">
+      <UniqueIdentifier>{bf246a7a-7890-4c1e-8503-2740962bae38}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
