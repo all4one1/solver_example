@@ -94,7 +94,7 @@ namespace mathsolver
 void conjugate_gradient(unsigned int N, double* x, double* x0, double* b, SparseMatrix& A)
 {
 	double rs_old = 0, rs_new = 0;
-	double buffer = 0, buffer2 = 0;
+	double buffer = 0; // buffer2 = 0;
 	double* buffer_ptr = new double[N];
 
 	double* r0 = new double[N];
@@ -142,8 +142,6 @@ void conjugate_gradient(unsigned int N, double* x, double* x0, double* b, Sparse
 
 	cout << "k = " << k << endl;
 }
-
-
 void BICGSTAB(unsigned int N, double* x, double* x0, double* b, SparseMatrix& A)
 {
 	double rs_old = 1, rs_new = 1;
@@ -269,7 +267,6 @@ void BICGSTAB2(unsigned int N, double* x, double* x0, double* b, SparseMatrix& A
 	mathsolver::vector_copy_into_vector(r, p, N); // p = r
 	mathsolver::vector_dot_vector(r_hat, r, rs_old, N); // res = r_hat * r
 
-
 	double eps = 1e-8;
 	unsigned int k = 0;
 	while (true)
@@ -280,6 +277,7 @@ void BICGSTAB2(unsigned int N, double* x, double* x0, double* b, SparseMatrix& A
 		mathsolver::vector_dot_vector(r_hat, r, rs_new, N); 
 		beta = (rs_new / rs_old) * (alpha / omega);
 		rs_old = rs_new;
+
 
 
 		mathsolver::vector_plus_scalarDotVector_plus_scalarDotVector(r, beta, p, -beta * omega, Ap, p, N);
@@ -305,7 +303,8 @@ void BICGSTAB2(unsigned int N, double* x, double* x0, double* b, SparseMatrix& A
 		{
 			break;
 		}
+		if (k % 1000 == 0) cout << k << " " << abs(buffer) << endl;
 	}
 
-	cout << "k = " << k << endl;
+	cout << k << " " << abs(buffer) << endl;
 }

@@ -77,6 +77,7 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <CudaCompile Include="ReductionModified.cu" />
     <CudaCompile Include="main.cu" />
   </ItemGroup>
   <ItemGroup>
@@ -85,7 +86,10 @@
     <ClInclude Include="CPUsolver.h" />
     <ClInclude Include="Extras.h" />
     <ClInclude Include="FromOuterSparse\SparseMatrix.h" />
+    <ClInclude Include="ReductionModified.cuh" />
     <ClInclude Include="Header.h" />
+    <ClInclude Include="CuCG.h" />
+    <ClInclude Include="CuOperations.h" />
     <ClInclude Include="TEST.h" />
     <ClInclude Include="CG.h" />
   </ItemGroup>

@@ -8,6 +8,9 @@
     <CudaCompile Include="CudaIterSolver\CuSolver.cpp">
       <Filter>Cuda</Filter>
     </CudaCompile>
+    <CudaCompile Include="ReductionModified.cu">
+      <Filter>CuCG</Filter>
+    </CudaCompile>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="FromOuterSparse\SparseMatrix.cpp">
@@ -34,6 +37,15 @@
       <Filter>Cuda</Filter>
     </ClInclude>
     <ClInclude Include="Header.h" />
+    <ClInclude Include="CuCG.h">
+      <Filter>CuCG</Filter>
+    </ClInclude>
+    <ClInclude Include="CuOperations.h">
+      <Filter>CuCG</Filter>
+    </ClInclude>
+    <ClInclude Include="ReductionModified.cuh">
+      <Filter>CuCG</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Sparse">
@@ -41,6 +53,9 @@
     </Filter>
     <Filter Include="Cuda">
       <UniqueIdentifier>{bf246a7a-7890-4c1e-8503-2740962bae38}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CuCG">
+      <UniqueIdentifier>{5d7c6009-853d-4c85-9ae3-1691308df8f9}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
