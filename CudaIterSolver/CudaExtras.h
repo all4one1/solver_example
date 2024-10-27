@@ -33,7 +33,6 @@ struct SparseMatrixCuda
 	size_t bytesCol = 0;
 	size_t bytesRow = 0;
 	double* val = nullptr;
-	//double* aux = nullptr;
 	int* col = nullptr;
 	int* row = nullptr;
 
@@ -46,12 +45,10 @@ struct SparseMatrixCuda
 		bytesRow = nrow * sizeof(int);
 
 		cudaMalloc((void**)&val, sizeof(double) * nval);
-		//cudaMalloc((void**)&aux, sizeof(double) * nval);
 		cudaMalloc((void**)&col, sizeof(int) * nval);
 		cudaMalloc((void**)&row, sizeof(int) * nrow);
 
 		cudaMemcpy(val, v, bytesVal, cudaMemcpyHostToDevice);
-		//cudaMemcpy(val, v, bytesVal, cudaMemcpyHostToDevice);
 		cudaMemcpy(col, c, bytesCol, cudaMemcpyHostToDevice);
 		cudaMemcpy(row, r, bytesRow, cudaMemcpyHostToDevice);
 	}

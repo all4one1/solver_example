@@ -84,12 +84,12 @@
     <ClInclude Include="CudaIterSolver\CuCG.h" />
     <ClInclude Include="CudaIterSolver\CudaExtras.h" />
     <ClInclude Include="CudaIterSolver\CudaReduction\CuReduction.h" />
-    <ClInclude Include="CudaIterSolver\CuGraph.h" />
     <ClInclude Include="CudaIterSolver\CuSolver.h" />
     <ClInclude Include="CPUsolver.h" />
     <ClInclude Include="Extras.h" />
     <ClInclude Include="FromOuterSparse\SparseMatrix.h" />
     <ClInclude Include="CG.h" />
+    <ClInclude Include="others.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="CudaIterSolver\CudaReduction\CuReduction.cpp" />

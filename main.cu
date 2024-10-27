@@ -111,11 +111,15 @@ int main()
 	SparseMatrixCuda SMC(SM.Nfull, SM.nval, SM.val.data(), SM.col.data(), SM.raw.data()); 
 	CudaLaunchSetup kernel(SM.Nfull);
 
+	BiCGSTAB solver_cg(N, f_dev, f0_dev, b_dev, SMC, kernel);
+	//solver_cg.make_graph(f_dev, f0_dev, b_dev, SMC);
 
 	timer.start("CUDA");
-	CUDA_BICGSTAB_WITH_GRAPH(N, f_dev, f0_dev, b_dev, SMC, kernel);
+	//solver_cg.solve_directly(f_dev, f0_dev, b_dev, SMC);
+	solver_cg.solve_with_graph(f_dev, f0_dev, b_dev, SMC);
+	//CUDA_BICGSTAB_WITH_GRAPH(N, f_dev, f0_dev, b_dev, SMC, kernel);
 	//CUDA_BICGSTAB(N, f_dev, f0_dev, b_dev, SMC, kernel);
-	cudaDeviceSynchronize();
+	//cudaDeviceSynchronize();
 	timer.end("CUDA");
 
 	//CudaIterSolver CUsolver;
@@ -130,7 +134,8 @@ int main()
 	timer.show_info();
 
 
-	
+
+
 	return 0;
 }
 

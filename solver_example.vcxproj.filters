@@ -32,7 +32,7 @@
     </ClInclude>
     <ClInclude Include="CudaIterSolver\CuCG.h" />
     <ClInclude Include="CudaIterSolver\CudaExtras.h" />
-    <ClInclude Include="CudaIterSolver\CuGraph.h" />
+    <ClInclude Include="others.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Sparse">

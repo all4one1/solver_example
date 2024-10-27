@@ -16,7 +16,6 @@ namespace CuCG
 	enum class KernelCoefficient	{beta_and_omega, alpha_and_omega, alpha, omega};
 	enum class ExtraAction { NONE, compute_rs_new_and_beta, compute_alpha, compute_omega, compute_buffer, compute_rs_old };
 
-
 	__device__ double rs_old = 1, rs_new = 1, alpha = 1, beta = 1, buffer = 1, buffer2 = 1, omega = 1;
 
 	__global__ void check()
@@ -115,59 +114,6 @@ namespace CuCG
 			}
 		}
 	}
-	__global__ void dot_product(double* v1, double* v2, unsigned int n, double* reduced, bool first, bool last, ExtraAction action) {
-		extern __shared__ double shared[];
-		unsigned int tid = threadIdx.x;
-		unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-		if (i < n)
-		{
-			if (first) shared[tid] = v1[i] * v2[i];
-			else shared[tid] = v1[i];
-		}
-		else
-			shared[tid] = 0.0;
-
-		__syncthreads();
-
-		for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
-		{
-			if (tid < s)
-				shared[tid] += shared[tid + s];
-			__syncthreads();
-		}
-		if (tid == 0)
-		{
-			reduced[blockIdx.x] = shared[0];
-			if (last)
-			{
-				extra_action__(shared[0], action);
-				//switch (action)
-				//{
-				//case ExtraAction::compute_rs_new_and_beta:
-				//	rs_new = shared[0];
-				//	beta = (rs_new / rs_old) * (alpha / omega);
-				//	rs_old = rs_new;
-				//	break;
-				//case ExtraAction::compute_alpha:
-				//	alpha = rs_new / shared[0];
-				//	break;
-				//case ExtraAction::compute_omega:
-				//	omega = buffer / shared[0];
-				//	break;
-				//case ExtraAction::compute_buffer:
-				//	buffer = shared[0];
-				//	break;
-				//case ExtraAction::compute_rs_old:
-				//	rs_old = shared[0];
-				//	break;
-				//default:
-				//	break;
-				//}
-
-			}
-		}
-	}
 
 	struct CudaReductionM
 	{
@@ -183,7 +129,7 @@ namespace CuCG
 		double** arr = nullptr;
 		double* second = nullptr;
 
-		CudaReductionM(unsigned int N, unsigned int thr = 1024);
+		CudaReductionM(unsigned int N, unsigned int thr = def_threads);
 		CudaReductionM();
 		~CudaReductionM();
 
@@ -226,11 +172,10 @@ namespace CuCG
 	CudaReductionM::~CudaReductionM()
 	{
 		cudaFree(res_array); res_array = nullptr;
-		delete[] arr; arr = nullptr;
+		delete[] arr; 	arr = nullptr;
 		grid_v.clear();
 		N_v.clear();
 	}
-
 	double CudaReductionM::reduce(double* v1, double* v2, bool withCopy, ExtraAction action)
 	{
 		arr[0] = v1;	second = v2;
@@ -254,9 +199,7 @@ namespace CuCG
 		default:
 			break;
 		}
-
-		//for (unsigned int i = 0; i < steps; i++)	reduce5<double, 256><< <grid_v[i], threads, smem >> > (arr[i], second, arr[i + 1], N_v[i], i == 0, i == steps - 1, action);
-			//dot_product << < grid_v[i], threads, smem >> > (arr[i], second, N_v[i], arr[i + 1], i == 0, i == steps - 1, action);
+		//for (unsigned int i = 0; i < steps; i++)	dot_product << < grid_v[i], threads, smem >> > (arr[i], second, N_v[i], arr[i + 1], i == 0, i == steps - 1, action);
 		
 		if (withCopy) cudaMemcpy(&res, res_array, sizeof(double), cudaMemcpyDeviceToHost);
 
@@ -286,7 +229,6 @@ namespace CuCG
 		if (withCopy) graph.add_copy_node(&res, res_array, sizeof(double), cudaMemcpyDeviceToHost);
 		return graph;
 	}
-
 
 	__global__ void hadamard_product(double* res, double* v1, double* v2, unsigned int N)
 	{
@@ -407,198 +349,191 @@ namespace CuCG
 }
 
 
-void CUDA_BICGSTAB(unsigned int N, double* x, double* x0, double* b, 
-	SparseMatrixCuda& A, CudaLaunchSetup kernel_setting, unsigned int reduction_threads = 256)
+struct BiCGSTAB
 {
-	CuCG::CudaReductionM CR(N, 512);
+	double* r = nullptr, * r_hat = nullptr, * p = nullptr, * t = nullptr, * s = nullptr, * v = nullptr;
+
 	double eps = 1e-8;
 	double rs_host = 1;
-	unsigned int k = 0;
-	unsigned int Nbytes = N * sizeof(double);
-	//#define device_single_double(ptr) double *##ptr;   cudaMalloc((void**)&##ptr, sizeof(double));  cudaMemset(ptr, 0, sizeof(double)); 
-	#define device_double_ptr(ptr) double *##ptr;   cudaMalloc((void**)&##ptr, Nbytes);  cudaMemset(ptr, 0, Nbytes); 
-	device_double_ptr(r);
-	device_double_ptr(r_hat);
-	device_double_ptr(p);
-	device_double_ptr(t);
-	device_double_ptr(s);
-	device_double_ptr(v);
-	
-	cudaMemset(x, 0, Nbytes);
-
-	#define KERNEL(func) func<<< kernel_setting.Grid1D, kernel_setting.Block1D>>>
-	// r = b - Ax
-	KERNEL(CuCG::vector_minus_matrix_dot_vector)(r, b, A, x, N);
-	// r_hat = r
-	KERNEL(CuCG::vector_set_to_vector)(r_hat, r, N);
-	// p = r
-	KERNEL(CuCG::vector_set_to_vector)(p, r, N);
-
-	// rs = r_hat * r
-	CR.reduce(r_hat, r, true, CuCG::ExtraAction::compute_rs_old);
-
-	auto single_iteration = [&]()
-	{
-
-		// rs_new = r_hat * r; 		// beta =  (rs_new / rs_old) * (alpha / omega)		// rs_old = rs_new
-		CR.reduce(r_hat, r, false, CuCG::ExtraAction::compute_rs_new_and_beta);
-
-		// p = r + beta * ( p - omega * v)
-		KERNEL(CuCG::vector_add_2vectors)(p, r, p, v, N, CuCG::KernelCoefficient::beta_and_omega);
-		
-		// v = Ap
-		KERNEL(CuCG::matrix_dot_vector)(v, A, p, N);
-
-		// alpha = rs_new / (r_hat * v)
-		CR.reduce(r_hat, v, false, CuCG::ExtraAction::compute_alpha);
-
-		// s = r - alpha * v
-		KERNEL(CuCG::vector_minus_vector)(s, r, v, N, CuCG::KernelCoefficient::alpha);
-
-		// t = A * s
-		KERNEL(CuCG::matrix_dot_vector)(t, A, s, N);
-
-		// omega = (t * s) / (t * t)
-
-		CR.reduce(t, s, false, CuCG::ExtraAction::compute_buffer);
-		CR.reduce(t, t, false, CuCG::ExtraAction::compute_omega);
-
-		// x = x + alpha * p + omega * s
-		KERNEL(CuCG::vector_add_2vectors)(x, x, p, s, N, CuCG::KernelCoefficient::alpha_and_omega);
-
-		// r = s - omega * t
-		KERNEL(CuCG::vector_minus_vector)(r, s, t, N, CuCG::KernelCoefficient::omega);
-	};
-
-
-	while (true)
-	{
-		k++;	if (k > 1000000) break;
-
-		single_iteration();
-
-		// check exit by r^2
-		if (k < 20 || k % 50 == 0)
-		{
-			rs_host = CR.reduce(r, r, true, CuCG::ExtraAction::NONE);
-			if (k > 100000) break;
-			//if (abs(rs_host) < eps) break;
-		}
-
-		//if (k == 20000) break;
-		if (k % 1000 == 0) cout << k << " " << abs(rs_host) << endl;
-	}
-
-	cout << k << " " << abs(rs_host) << endl;
-}
-
-void CUDA_BICGSTAB_WITH_GRAPH(unsigned int N, double* x, double* x0, double* b, 
-	SparseMatrixCuda& A, CudaLaunchSetup kernel_setting, unsigned int reduction_threads = 256)
-{
+	unsigned int N = 0, Nbytes = 0, k = 0;
+	unsigned int threads = 1, blocks = 1;
 	CuGraph graph;
-	CuCG::KernelCoefficient action;
-	unsigned int threads = kernel_setting.Block1D.x;
-	unsigned int blocks = kernel_setting.Grid1D.x;
+	CuCG::CudaReductionM *CR;
 
+	#define KERNEL(func) func<<< blocks, threads>>>
 
-	CuCG::CudaReductionM CR(N, reduction_threads);
-	double eps = 1e-8;
-	double rs_host = 1;
-	unsigned int k = 0;
-	unsigned int Nbytes = N * sizeof(double);
-	//#define device_single_double(ptr) double *##ptr;   cudaMalloc((void**)&##ptr, sizeof(double));  cudaMemset(ptr, 0, sizeof(double)); 
-	#define device_double_ptr(ptr) double *##ptr;   cudaMalloc((void**)&##ptr, Nbytes);  cudaMemset(ptr, 0, Nbytes); 
-	device_double_ptr(r);
-	device_double_ptr(r_hat);
-	device_double_ptr(p);
-	device_double_ptr(t);
-	device_double_ptr(s);
-	device_double_ptr(v);
-
-	cudaMemset(x, 0, Nbytes);
-
-	#define KERNEL(func) func<<< kernel_setting.Grid1D, kernel_setting.Block1D>>>
-
-	// r = b - Ax
-	KERNEL(CuCG::vector_minus_matrix_dot_vector)(r, b, A, x, N);
-	// r_hat = r
-	KERNEL(CuCG::vector_set_to_vector)(r_hat, r, N);
-	// p = r
-	KERNEL(CuCG::vector_set_to_vector)(p, r, N);
-
-	// rs = r_hat * r
-	CR.reduce(r_hat, r, false, CuCG::ExtraAction::compute_rs_old);
-	
-
-	// 1. rs_new = r_hat * r; 		// beta =  (rs_new / rs_old) * (alpha / omega)		// rs_old = rs_new
-	graph.add_graph_as_node(CR.make_graph(r_hat, r, false, CuCG::ExtraAction::compute_rs_new_and_beta));
-	
-	// 2. p = r + beta * ( p - omega * v)
+	BiCGSTAB() {};
+	BiCGSTAB(unsigned int N_, double* x, double* x0, double* b, 
+		SparseMatrixCuda& A, CudaLaunchSetup kernel_setting, unsigned int reduction_threads = 256)
 	{
-		action = CuCG::KernelCoefficient::beta_and_omega;
-		void* args[] = { &p, &r, &p, &v, &N, &action };
-		graph.add_kernel_node(threads, blocks, CuCG::vector_add_2vectors, args);
+		N = N_;
+		Nbytes = N * sizeof(double);
+		threads = kernel_setting.Block1D.x;
+		blocks = kernel_setting.Grid1D.x;
+
+		#define alloc_(ptr) cudaMalloc((void**)&##ptr, Nbytes);  cudaMemset(ptr, 0, Nbytes); 
+		alloc_(r); alloc_(r_hat); alloc_(p); alloc_(t); alloc_(s); alloc_(v);
+
+		CR = new CuCG::CudaReductionM(N, reduction_threads);
+		make_graph(x, x0, b, A);
 	}
 
-	// 3. v = Ap
+	void make_graph(double* x, double* x0, double* b, SparseMatrixCuda& A)
 	{
-		void* args[] = { &v, &A, &p, &N };
-		graph.add_kernel_node(threads, blocks, CuCG::matrix_dot_vector, args);
-	}
+		CuCG::KernelCoefficient action;
 
-	// 4. alpha = rs_new / (r_hat * v)
-	graph.add_graph_as_node(CR.make_graph(r_hat, v, false, CuCG::ExtraAction::compute_alpha));
+		// 1. rs_new = r_hat * r; 		// beta =  (rs_new / rs_old) * (alpha / omega)		// rs_old = rs_new
+		graph.add_graph_as_node(CR->make_graph(r_hat, r, false, CuCG::ExtraAction::compute_rs_new_and_beta));
 
-	// 5. s = r - alpha * v
-	{ 
-		action = CuCG::KernelCoefficient::alpha;
-		void* args[] = { &s, &r, &v, &N, &action };
-		graph.add_kernel_node(threads, blocks, CuCG::vector_minus_vector, args);
-	}
-
-	// 6. t = A * s
-	{
-		void* args[] = { &t, &A, &s, &N };
-		graph.add_kernel_node(threads, blocks, CuCG::matrix_dot_vector, args);
-	}
-
-	// 7. omega = (t * s) / (t * t)
-	graph.add_graph_as_node(CR.make_graph(t, s, false, CuCG::ExtraAction::compute_buffer));
-	graph.add_graph_as_node(CR.make_graph(t, t, false, CuCG::ExtraAction::compute_omega));
-
-	// 8. x = x + alpha * p + omega * s
-	{
-		action = CuCG::KernelCoefficient::alpha_and_omega;
-		void* args[] = { &x, &x, &p, &s, &N, &action };
-		graph.add_kernel_node(threads, blocks, CuCG::vector_add_2vectors, args);
-	}
-
-	// 9. r = s - omega * t
-	{
-		action = CuCG::KernelCoefficient::omega;
-		void* args[] = { &r, &s, &t, &N, &action };
-		graph.add_kernel_node(threads, blocks, CuCG::vector_minus_vector, args);
-	}
-
-	graph.instantiate();
-	while (true)
-	{
-		k++;	if (k > 1000000) break;
-
-		graph.launch();
-
-
-		// check exit by r^2
-		if (k < 20 || k % 50 == 0)
+		// 2. p = r + beta * ( p - omega * v)
 		{
-			rs_host = CR.reduce(r, r, true, CuCG::ExtraAction::NONE);
-			if (k > 100000) break;
-			//if (abs(rs_host) < eps) break;
+			action = CuCG::KernelCoefficient::beta_and_omega;
+			void* args[] = { &p, &r, &p, &v, &N, &action };
+			graph.add_kernel_node(threads, blocks, CuCG::vector_add_2vectors, args);
 		}
 
-		//if (k == 20000) break;
-		if (k % 1000 == 0) cout << k << " " << abs(rs_host) << endl;
-	}
+		// 3. v = Ap
+		{
+			void* args[] = { &v, &A, &p, &N };
+			graph.add_kernel_node(threads, blocks, CuCG::matrix_dot_vector, args);
+		}
 
-	cout << k << " " << abs(rs_host) << endl;
-}
+		// 4. alpha = rs_new / (r_hat * v)
+		graph.add_graph_as_node(CR->make_graph(r_hat, v, false, CuCG::ExtraAction::compute_alpha));
+
+		// 5. s = r - alpha * v
+		{
+			action = CuCG::KernelCoefficient::alpha;
+			void* args[] = { &s, &r, &v, &N, &action };
+			graph.add_kernel_node(threads, blocks, CuCG::vector_minus_vector, args);
+		}
+
+		// 6. t = A * s
+		{
+			void* args[] = { &t, &A, &s, &N };
+			graph.add_kernel_node(threads, blocks, CuCG::matrix_dot_vector, args);
+		}
+
+		// 7. omega = (t * s) / (t * t)
+		graph.add_graph_as_node(CR->make_graph(t, s, false, CuCG::ExtraAction::compute_buffer));
+		graph.add_graph_as_node(CR->make_graph(t, t, false, CuCG::ExtraAction::compute_omega));
+
+		// 8. x = x + alpha * p + omega * s
+		{
+			action = CuCG::KernelCoefficient::alpha_and_omega;
+			void* args[] = { &x, &x, &p, &s, &N, &action };
+			graph.add_kernel_node(threads, blocks, CuCG::vector_add_2vectors, args);
+		}
+
+		// 9. r = s - omega * t
+		{
+			action = CuCG::KernelCoefficient::omega;
+			void* args[] = { &r, &s, &t, &N, &action };
+			graph.add_kernel_node(threads, blocks, CuCG::vector_minus_vector, args);
+		}
+
+		graph.instantiate();
+	}
+	void solve_with_graph(double* x, double* x0, double* b, SparseMatrixCuda& A)
+	{
+		double rs_host = 1;  k = 0;
+		cudaMemset(x, 0, Nbytes);
+
+		// r = b - Ax
+		KERNEL(CuCG::vector_minus_matrix_dot_vector)(r, b, A, x, N);
+		// r_hat = r
+		KERNEL(CuCG::vector_set_to_vector)(r_hat, r, N);
+		// p = r
+		KERNEL(CuCG::vector_set_to_vector)(p, r, N);
+		// rs = r_hat * r
+		CR->reduce(r_hat, r, false, CuCG::ExtraAction::compute_rs_old);
+
+		while (true)
+		{
+			k++;	if (k > 1000000) break;
+			graph.launch();
+
+			// check exit by r^2
+			if (k < 20 || k % 50 == 0)
+			{
+				rs_host = CR->reduce(r, r, true, CuCG::ExtraAction::NONE);
+				if (k > 100000) break;
+				//if (abs(rs_host) < eps) break;
+			}
+
+			//if (k == 20000) break;
+			if (k % 1000 == 0) cout << k << " " << abs(rs_host) << endl;
+		}
+
+		cout << k << " " << abs(rs_host) << endl;
+	}
+	void solve_directly(double* x, double* x0, double* b, SparseMatrixCuda& A)
+	{
+		double rs_host = 1;  k = 0;
+		cudaMemset(x, 0, Nbytes);
+
+		// r = b - Ax
+		KERNEL(CuCG::vector_minus_matrix_dot_vector)(r, b, A, x, N);
+		// r_hat = r
+		KERNEL(CuCG::vector_set_to_vector)(r_hat, r, N);
+		// p = r
+		KERNEL(CuCG::vector_set_to_vector)(p, r, N);
+
+		// rs = r_hat * r
+		CR->reduce(r_hat, r, true, CuCG::ExtraAction::compute_rs_old);
+
+		auto single_iteration = [&]()
+		{
+
+			// rs_new = r_hat * r; 		// beta =  (rs_new / rs_old) * (alpha / omega)		// rs_old = rs_new
+			CR->reduce(r_hat, r, false, CuCG::ExtraAction::compute_rs_new_and_beta);
+
+			// p = r + beta * ( p - omega * v)
+			KERNEL(CuCG::vector_add_2vectors)(p, r, p, v, N, CuCG::KernelCoefficient::beta_and_omega);
+
+			// v = Ap
+			KERNEL(CuCG::matrix_dot_vector)(v, A, p, N);
+
+			// alpha = rs_new / (r_hat * v)
+			CR->reduce(r_hat, v, false, CuCG::ExtraAction::compute_alpha);
+
+			// s = r - alpha * v
+			KERNEL(CuCG::vector_minus_vector)(s, r, v, N, CuCG::KernelCoefficient::alpha);
+
+			// t = A * s
+			KERNEL(CuCG::matrix_dot_vector)(t, A, s, N);
+
+			// omega = (t * s) / (t * t)
+
+			CR->reduce(t, s, false, CuCG::ExtraAction::compute_buffer);
+			CR->reduce(t, t, false, CuCG::ExtraAction::compute_omega);
+
+			// x = x + alpha * p + omega * s
+			KERNEL(CuCG::vector_add_2vectors)(x, x, p, s, N, CuCG::KernelCoefficient::alpha_and_omega);
+
+			// r = s - omega * t
+			KERNEL(CuCG::vector_minus_vector)(r, s, t, N, CuCG::KernelCoefficient::omega);
+		};
+
+
+		while (true)
+		{
+			k++;	if (k > 1000000) break;
+
+			single_iteration();
+
+			// check exit by r^2
+			if (k < 20 || k % 50 == 0)
+			{
+				rs_host = CR->reduce(r, r, true, CuCG::ExtraAction::NONE);
+				if (k > 100000) break;
+				//if (abs(rs_host) < eps) break;
+			}
+
+			//if (k == 20000) break;
+			if (k % 1000 == 0) cout << k << " " << abs(rs_host) << endl;
+		}
+
+		cout << k << " " << abs(rs_host) << endl;
+	}
+};
