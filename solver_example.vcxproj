@@ -78,21 +78,17 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CudaCompile Include="ReductionModified.cu" />
     <CudaCompile Include="main.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CudaIterSolver\CuCG.h" />
+    <ClInclude Include="CudaIterSolver\CudaExtras.h" />
     <ClInclude Include="CudaIterSolver\CudaReduction\CuReduction.h" />
+    <ClInclude Include="CudaIterSolver\CuGraph.h" />
     <ClInclude Include="CudaIterSolver\CuSolver.h" />
     <ClInclude Include="CPUsolver.h" />
     <ClInclude Include="Extras.h" />
     <ClInclude Include="FromOuterSparse\SparseMatrix.h" />
-    <ClInclude Include="CuGraph.h" />
-    <ClInclude Include="ReductionModified.cuh" />
-    <ClInclude Include="Header.h" />
-    <ClInclude Include="CuCG.h" />
-    <ClInclude Include="CuOperations.h" />
-    <ClInclude Include="TEST.h" />
     <ClInclude Include="CG.h" />
   </ItemGroup>
   <ItemGroup>

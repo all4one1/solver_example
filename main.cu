@@ -23,7 +23,7 @@ __global__ void form_rhs(unsigned int N, double* b, double* f0, double coef)
 
 
 #include "CG.h"
-#include "CuCG.h"
+#include "CudaIterSolver/CuCG.h"
 
 void finite_volume(SparseMatrix &SM, double *b, double a, unsigned int N)
 {
@@ -43,7 +43,6 @@ void finite_volume(SparseMatrix &SM, double *b, double a, unsigned int N)
 	b[0] = 0; 
 	b[N - 1] = 2 * a;
 }
-
 void finite_difference(SparseMatrix& SM, double* b, double a, unsigned int N)
 {
 	N = N - 1;
@@ -69,14 +68,6 @@ void finite_difference(SparseMatrix& SM, double* b, double a, unsigned int N)
 int main()
 {
 	FuncTimer timer;
-	//CudaIterSolver CUsolver;
-	//CUsolver.auto_test();
-
-	//SparseMatrixCuda SMC(n, nval, sparse_matrix_elements, column, row);
-	//CudaLaunchSetup kernel_settings(n);
-
-
-
 
 	int nx = 10000;
 	int N = nx;
@@ -98,7 +89,6 @@ int main()
 
 	SparseMatrix SM(N);
 
-
 	//double tau = 0.1;
 	//double coef = 0;// 1.0 / tau;
 	double a = 1.0 / pow(hx, 1);
@@ -106,49 +96,20 @@ int main()
 	finite_volume(SM, b_host, a, N);
 	//finite_difference(SM, b_host, a, N);
 
-	
-	//run(SM, b_host, N);
-	//return;
-
 
 	//IterativeSolver hostSolver;	hostSolver.solveJacobi(f_host, f0_host, b_host, N, SM);
 	//conjugate_gradient(N, f_host, f0_host, b_host, SM);
-
 	timer.start("HOST");
-	//BICGSTAB2(N, f_host, f0_host, b_host, SM);
+	//BICGSTAB(N, f_host, f0_host, b_host, SM);
 	timer.end("HOST");
-	cout << f_host[N / 2] << " " << x_(N / 2) << endl;
-
-	//for (int i = 0; i < N; i = i + 1) { cout << f_host[i] << " " << x_(i) << endl; }
-	//ofstream w("result.dat");	
-	//w << 0 << " " << 0 << endl;
-	//for (int i = 0; i < N; i = i + 1) { w << x_(i) << " " << f_host[i] << endl; }
-	//w << 1 << " " << 1 << endl;
-	//return 0;
-
-
 
 
 	memset(f_host, 0, sizeof(double) * N);
 	cudaMemcpy(b_dev, b_host, Nbytes, cudaMemcpyHostToDevice);
 	cudaMemcpy(f0_dev, f_host, Nbytes, cudaMemcpyHostToDevice);
 	//SM.save_full_matrix_with_rhs(4, b_host);
-	SparseMatrixCuda SMC(SM.Nfull, SM.nval, SM.val.data(), SM.col.data(), SM.raw.data()); //1 more array needed
+	SparseMatrixCuda SMC(SM.Nfull, SM.nval, SM.val.data(), SM.col.data(), SM.raw.data()); 
 	CudaLaunchSetup kernel(SM.Nfull);
-	//cuSparse_test(SMC.Nfull, SMC.nval, SMC.row, SMC.col, SMC.val, SMC.Lval);
-
-	//CudaIterSolver CUsolver;
-	//timer.start("CUDA");
-	//CUsolver.solveJacobi_experimental(f_dev, f0_dev, b_dev, N, SMC, kernel);
-	//CUsolver.solveJacobi(f_dev, f0_dev, b_dev, N, SMC, kernel);
-	//timer.end("CUDA");
-	//cudaMemset(f0_dev, 0, Nbytes); 
-	//timer.show_info();
-	//for (int i = 0; i < 10; i++)
-	//{
-	//	form_rhs << <kernel.Grid1D, kernel.Block1D >> > (N, b_dev, f_dev, coef);
-	//	CUsolver.solveJacobi(f_dev, f0_dev, b_dev, N, SMC, kernel);
-	//}
 
 
 	timer.start("CUDA");
@@ -159,6 +120,7 @@ int main()
 
 	//CudaIterSolver CUsolver;
 	//CUsolver.solveJacobi(f_dev, f0_dev, b_dev, N, SMC, kernel);
+
 	cudaMemcpy(f_host, f_dev, Nbytes, cudaMemcpyDeviceToHost);
 	cout << f_host[N / 2] << " " << x_(N / 2) << endl;
 	//for (int i = 0; i < N; i = i + 1) { cout << f_host[i] << " " << x_(i) << endl; }
