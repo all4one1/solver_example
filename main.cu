@@ -152,7 +152,9 @@ int main()
 
 
 	timer.start("CUDA");
-	CUDA_BICGSTAB(N, f_dev, f0_dev, b_dev, SMC, kernel);
+	CUDA_BICGSTAB_WITH_GRAPH(N, f_dev, f0_dev, b_dev, SMC, kernel);
+	//CUDA_BICGSTAB(N, f_dev, f0_dev, b_dev, SMC, kernel);
+	cudaDeviceSynchronize();
 	timer.end("CUDA");
 
 	//CudaIterSolver CUsolver;

@@ -3,7 +3,13 @@
 #include "device_launch_parameters.h"
 #include <cuda.h>
 #include <iostream>
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
+#include <stdio.h>
 
+#include "CuGraph.h"
+
+namespace cg = cooperative_groups;
 //struct CudaLaunchSetup
 //{
 //	dim3 Grid3D, Block3D, Grid1D, Block1D;
@@ -65,7 +71,6 @@ namespace CuCG
 
 
 	__device__ double rs_old = 1, rs_new = 1, alpha = 1, beta = 1, buffer = 1, buffer2 = 1, omega = 1;
-	__device__ SparseMatrixCuda *A_dev;
 
 	__global__ void check()
 	{
@@ -78,6 +83,90 @@ namespace CuCG
 		for (unsigned int i = 0; i < N; i++)
 		{
 			printf("%i %f \n", i, f[i]);
+		}
+	}
+
+	__device__ void extra_action__(double res, ExtraAction action)
+	{
+		switch (action)
+		{
+		case ExtraAction::compute_rs_new_and_beta:
+			rs_new = res;
+			beta = (rs_new / rs_old) * (alpha / omega);
+			rs_old = rs_new;
+			break;
+		case ExtraAction::compute_alpha:
+			alpha = rs_new / res;
+			break;
+		case ExtraAction::compute_omega:
+			omega = buffer / res;
+			break;
+		case ExtraAction::compute_buffer:
+			buffer = res;
+			break;
+		case ExtraAction::compute_rs_old:
+			rs_old = res;
+			break;
+		default:
+			break;
+		}
+	}
+
+	template <class T, unsigned int blockSize>
+	__global__ void reduce5(T* g_idata, T* second, T* g_odata, unsigned int n, bool first, bool last, ExtraAction action) {
+		// Handle to thread block group
+		cg::thread_block cta = cg::this_thread_block();
+		extern __shared__ double sdata[];
+
+		// perform first level of reduction,
+		// reading from global memory, writing to shared memory
+		unsigned int tid = threadIdx.x;
+		unsigned int i = blockIdx.x * (blockSize * 2) + threadIdx.x;
+
+		T mySum = (i < n) ? g_idata[i] * (first ? second[i] : 1) : 0;
+		if (i + blockSize < n) mySum += g_idata[i + blockSize] * (first ? second[i + blockSize] : 1);
+
+		sdata[tid] = mySum;
+		cg::sync(cta);
+
+		// do reduction in shared mem
+		if ((blockSize >= 512) && (tid < 256)) {
+			sdata[tid] = mySum = mySum + sdata[tid + 256];
+		}
+
+		cg::sync(cta);
+
+		if ((blockSize >= 256) && (tid < 128)) {
+			sdata[tid] = mySum = mySum + sdata[tid + 128];
+		}
+
+		cg::sync(cta);
+
+		if ((blockSize >= 128) && (tid < 64)) {
+			sdata[tid] = mySum = mySum + sdata[tid + 64];
+		}
+
+		cg::sync(cta);
+
+		cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
+
+		if (cta.thread_rank() < 32) {
+			// Fetch final intermediate sum from 2nd warp
+			if (blockSize >= 64) mySum += sdata[tid + 32];
+			// Reduce final warp using shuffle
+			for (int offset = tile32.size() / 2; offset > 0; offset /= 2) {
+				mySum += tile32.shfl_down(mySum, offset);
+			}
+		}
+
+		// write result for this block to global mem
+		if (cta.thread_rank() == 0)
+		{
+			g_odata[blockIdx.x] = mySum;
+			if (last)
+			{
+				extra_action__(mySum, action);
+			}
 		}
 	}
 
@@ -107,28 +196,29 @@ namespace CuCG
 			reduced[blockIdx.x] = shared[0];
 			if (last)
 			{
-				switch (action)
-				{
-				case ExtraAction::compute_rs_new_and_beta:
-					rs_new = shared[0];
-					beta = (rs_new / rs_old) * (alpha / omega);
-					rs_old = rs_new;
-					break;
-				case ExtraAction::compute_alpha:
-					alpha = rs_new / shared[0];
-					break;
-				case ExtraAction::compute_omega:
-					omega = buffer / shared[0];
-					break;
-				case ExtraAction::compute_buffer:
-					buffer = shared[0];
-					break;
-				case ExtraAction::compute_rs_old:
-					rs_old = shared[0];
-					break;
-				default:
-					break;
-				}
+				extra_action__(shared[0], action);
+				//switch (action)
+				//{
+				//case ExtraAction::compute_rs_new_and_beta:
+				//	rs_new = shared[0];
+				//	beta = (rs_new / rs_old) * (alpha / omega);
+				//	rs_old = rs_new;
+				//	break;
+				//case ExtraAction::compute_alpha:
+				//	alpha = rs_new / shared[0];
+				//	break;
+				//case ExtraAction::compute_omega:
+				//	omega = buffer / shared[0];
+				//	break;
+				//case ExtraAction::compute_buffer:
+				//	buffer = shared[0];
+				//	break;
+				//case ExtraAction::compute_rs_old:
+				//	rs_old = shared[0];
+				//	break;
+				//default:
+				//	break;
+				//}
 
 			}
 		}
@@ -136,9 +226,12 @@ namespace CuCG
 
 	struct CudaReductionM
 	{
-		//GPU-Grid points and Node (total) points
-		unsigned int* Gp = nullptr, * Np = nullptr;
-		unsigned int steps = 0, threads = 1024;
+		std::vector<unsigned int> grid_v;
+		std::vector<unsigned int> N_v;
+
+		#define def_threads 512
+		unsigned int N = 0;
+		unsigned int steps = 0, threads = def_threads, smem = sizeof(double) * def_threads;
 
 		double* res_array = nullptr;
 		double res = 0;
@@ -150,59 +243,106 @@ namespace CuCG
 		~CudaReductionM();
 
 		double reduce(double* v1, double* v2, bool withCopy = true, ExtraAction action = ExtraAction::NONE);
+		CuGraph make_graph(double* v1, double* v2, bool withCopy, ExtraAction action);
 	};
 
 	CudaReductionM::CudaReductionM() {}
 	CudaReductionM::CudaReductionM(unsigned int N, unsigned int thr)
 	{
-		threads = thr;
+		bool doubleRead = false;
+		if (thr < 64)
+		{
+			std::cout << "more threads needed " << std::endl;
+			threads = 64;
+		}
 
-		unsigned int GN = N;
+		unsigned int temp_ = N;
+		threads = thr;
+		N_v.push_back(N);
+
+		steps = 0;
 		while (true)
 		{
 			steps++;
-			GN = (unsigned int)ceil(GN / (threads + 0.0));
-			if (GN == 1)  break;
+			if (doubleRead) temp_ = (temp_ + (threads * 2 - 1)) / (threads * 2);
+			else temp_ = (temp_ + threads - 1) / threads;
+
+			grid_v.push_back(temp_);
+			N_v.push_back(temp_);
+			if (temp_ == 1)  break;
 		}
-		GN = N;
 
-		Gp = new unsigned int[steps];
-		Np = new unsigned int[steps];
+		if (res_array != nullptr) cudaFree(res_array);
+		cudaMalloc((void**)&res_array, sizeof(double) * N_v[1]);
+
+		if (arr != nullptr) delete[] arr;
 		arr = new double* [steps + 1];
-
-		for (unsigned int i = 0; i < steps; i++)
-			Gp[i] = GN = (unsigned int)ceil(GN / (threads + 0.0));
-		Np[0] = N;
-		for (unsigned int i = 1; i < steps; i++)
-			Np[i] = Gp[i - 1];
-
-		//if (steps == 1) std::cout << "Warning: a small array of data" << std::endl;
-		(steps != 1) ? cudaMalloc((void**)&res_array, sizeof(double) * Np[1]) : cudaMalloc((void**)&res_array, sizeof(double));
 	}
 	CudaReductionM::~CudaReductionM()
 	{
 		cudaFree(res_array); res_array = nullptr;
-		delete[] Gp; Gp = nullptr;
-		delete[] Np; Np = nullptr;
 		delete[] arr; arr = nullptr;
-		//delete[] second; second = nullptr;
+		grid_v.clear();
+		N_v.clear();
 	}
 
 	double CudaReductionM::reduce(double* v1, double* v2, bool withCopy, ExtraAction action)
 	{
-		arr[0] = v1;
-		second = v2;
+		arr[0] = v1;	second = v2;
 		for (unsigned int i = 1; i <= steps; i++)
 			arr[i] = res_array;
 
-		for (unsigned int i = 0; i < steps; i++)
+		switch (threads)
 		{
-			dot_product << < Gp[i], threads, 1024 * sizeof(double) >> > (arr[i], second, Np[i], arr[i + 1], i == 0, i == steps - 1, action);
+		case(512):
+			for (unsigned int i = 0; i < steps; i++)	reduce5<double, 512> << <grid_v[i], threads, smem >> > (arr[i], second, arr[i + 1], N_v[i], i == 0, i == steps - 1, action);
+			break;
+		case(256):
+			for (unsigned int i = 0; i < steps; i++)	reduce5<double, 256> << <grid_v[i], threads, smem >> > (arr[i], second, arr[i + 1], N_v[i], i == 0, i == steps - 1, action);
+			break;
+		case(128):
+			for (unsigned int i = 0; i < steps; i++)	reduce5<double, 128> << <grid_v[i], threads, smem >> > (arr[i], second, arr[i + 1], N_v[i], i == 0, i == steps - 1, action);
+			break;
+		case(64):
+			for (unsigned int i = 0; i < steps; i++)	reduce5<double, 64> << <grid_v[i], threads, smem >> > (arr[i], second, arr[i + 1], N_v[i], i == 0, i == steps - 1, action);
+			break;
+		default:
+			break;
 		}
+
+		//for (unsigned int i = 0; i < steps; i++)	reduce5<double, 256><< <grid_v[i], threads, smem >> > (arr[i], second, arr[i + 1], N_v[i], i == 0, i == steps - 1, action);
+			//dot_product << < grid_v[i], threads, smem >> > (arr[i], second, N_v[i], arr[i + 1], i == 0, i == steps - 1, action);
+		
 		if (withCopy) cudaMemcpy(&res, res_array, sizeof(double), cudaMemcpyDeviceToHost);
 
 		return res;
 	}
+
+	CuGraph CudaReductionM::make_graph(double* v1, double *v2, bool withCopy, ExtraAction action)
+	{
+		arr[0] = v1;	second = v2;
+		for (unsigned int i = 1; i <= steps; i++)
+			arr[i] = res_array;
+
+		void* kernel;
+
+		if (threads == 512) kernel = reinterpret_cast<void*>(&reduce5<double, 512>);
+		if (threads == 256) kernel = reinterpret_cast<void*>(&reduce5<double, 256>);
+		if (threads == 128) kernel = reinterpret_cast<void*>(&reduce5<double, 128>);
+		if (threads == 64)  kernel = reinterpret_cast<void*>(&reduce5<double, 64>);
+		
+		CuGraph graph;
+		for (unsigned int i = 0; i < steps; i++)
+		{
+			bool first = (i == 0);
+			bool last = (i == steps - 1);
+			void* args[] = { &arr[i], &second, &arr[i + 1], &N_v[i], &first, &last, &action };
+			graph.add_kernel_node(threads, grid_v[i], kernel, args, smem);
+		}
+		if (withCopy) graph.add_copy_node(&res, res_array, sizeof(double), cudaMemcpyDeviceToHost);
+		return graph;
+	}
+
 
 	__global__ void hadamard_product(double* res, double* v1, double* v2, unsigned int N)
 	{
@@ -212,7 +352,6 @@ namespace CuCG
 			res[i] = v1[i] * v2[i];
 		}
 	}
-
 	__global__ void matrix_dot_vector(double* res, SparseMatrixCuda M, double* vm, unsigned int N)
 	{
 		unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -222,20 +361,6 @@ namespace CuCG
 			for (int j = M.row[i]; j < M.row[i + 1]; j++)
 			{
 				s += M.val[j] * vm[M.col[j]];
-			}
-			res[i] = s;
-		}
-	}
-	__global__ void matrix_dot_vector(double* res, double* vm, unsigned int N)
-	{
-		//shared memory for s?
-		unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-		if (i < N)
-		{
-			double s = 0;
-			for (int j = A_dev->row[i]; j < A_dev->row[i + 1]; j++)
-			{
-				s += A_dev->val[j] * vm[A_dev->col[j]];
 			}
 			res[i] = s;
 		}
@@ -280,19 +405,7 @@ namespace CuCG
 			res[i] = v[i] - s;
 		}
 	}
-	__global__ void vector_minus_matrix_dot_vector(double* res, double* v, double* vm, unsigned int N)
-	{
-		unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-		if (i < N)
-		{
-			double s = 0;
-			for (int j = A_dev->row[i]; j < A_dev->row[i + 1]; j++)
-			{
-				s += A_dev->val[j] * vm[A_dev->col[j]];
-			}
-			res[i] = v[i] - s;
-		}
-	}
+
 	__global__ void vector_minus_vector(double* res, double* v1, double* v2, unsigned int N, KernelCoefficient choice)
 	{
 		unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -355,29 +468,11 @@ namespace CuCG
 }
 
 
-__global__ void accept(SparseMatrixCuda* A)
-{
-	CuCG::A_dev = A;
-	//printf("check: %i \n", A->Nfull);
-}
-__global__ void showA()
-{
-	printf("check: %i \n", CuCG::A_dev->Nfull);
-}
-
-void CUDA_INIT(SparseMatrixCuda& A)
-{
-	SparseMatrixCuda* Asend;
-	cudaMalloc((void**)&Asend, sizeof(SparseMatrixCuda));
-	cudaMemcpy(Asend, &A, sizeof(SparseMatrixCuda), cudaMemcpyHostToDevice);
-	accept << <1, 1 >> > (Asend);
-	//showA << <1, 1 >> > ();
-}
 
 
 void CUDA_BICGSTAB(unsigned int N, double* x, double* x0, double* b, SparseMatrixCuda& A, CudaLaunchSetup kernel_setting)
 {
-	CuCG::CudaReductionM CR(N);
+	CuCG::CudaReductionM CR(N, 512);
 	double eps = 1e-8;
 	double rs_host = 1;
 	unsigned int k = 0;
@@ -404,8 +499,7 @@ void CUDA_BICGSTAB(unsigned int N, double* x, double* x0, double* b, SparseMatri
 	KERNEL(CuCG::vector_set_to_vector)(p, r, N);
 
 	// rs = r_hat * r
-	CR.reduce(r_hat, r, false, CuCG::ExtraAction::compute_rs_old);
-
+	CR.reduce(r_hat, r, true, CuCG::ExtraAction::compute_rs_old);
 
 	auto single_iteration = [&]()
 	{
@@ -460,19 +554,115 @@ void CUDA_BICGSTAB(unsigned int N, double* x, double* x0, double* b, SparseMatri
 	}
 
 	cout << k << " " << abs(rs_host) << endl;
+}
+
+void CUDA_BICGSTAB_WITH_GRAPH(unsigned int N, double* x, double* x0, double* b, SparseMatrixCuda& A, CudaLaunchSetup kernel_setting)
+{
+	CuGraph graph;
+	CuCG::KernelCoefficient action;
+	unsigned int threads = kernel_setting.Block1D.x;
+	unsigned int blocks = kernel_setting.Grid1D.x;
 
 
+	CuCG::CudaReductionM CR(N, 256);
+	double eps = 1e-8;
+	double rs_host = 1;
+	unsigned int k = 0;
+	unsigned int Nbytes = N * sizeof(double);
+	//#define device_single_double(ptr) double *##ptr;   cudaMalloc((void**)&##ptr, sizeof(double));  cudaMemset(ptr, 0, sizeof(double)); 
+	#define device_double_ptr(ptr) double *##ptr;   cudaMalloc((void**)&##ptr, Nbytes);  cudaMemset(ptr, 0, Nbytes); 
+	device_double_ptr(r);
+	device_double_ptr(r_hat);
+	device_double_ptr(p);
+	device_double_ptr(t);
+	device_double_ptr(s);
+	device_double_ptr(v);
 
-	//cout << "GPU print below " << endl;
-	//CuCG::check2 << <1, 1 >> > (x, N);
-	//CuCG::check << <1, 1 >> > ();
-	//cudaDeviceSynchronize();
-	//system("pause");
+	cudaMemset(x, 0, Nbytes);
+	//cudaMemset(v, 0, Nbytes);
+	//cudaMemset(p, 0, Nbytes);
 
-	//cudaFree(r);
-	//cudaFree(r_hat);
-	//cudaFree(p);
-	//cudaFree(t);
-	//cudaFree(s);
-	//cudaFree(v);
+	#define KERNEL(func) func<<< kernel_setting.Grid1D, kernel_setting.Block1D>>>
+	// r = b - Ax
+	KERNEL(CuCG::vector_minus_matrix_dot_vector)(r, b, A, x, N);
+	// r_hat = r
+	KERNEL(CuCG::vector_set_to_vector)(r_hat, r, N);
+	// p = r
+	KERNEL(CuCG::vector_set_to_vector)(p, r, N);
+
+	// rs = r_hat * r
+	CR.reduce(r_hat, r, false, CuCG::ExtraAction::compute_rs_old);
+	
+
+	// 1. rs_new = r_hat * r; 		// beta =  (rs_new / rs_old) * (alpha / omega)		// rs_old = rs_new
+	graph.add_graph_as_node(CR.make_graph(r_hat, r, false, CuCG::ExtraAction::compute_rs_new_and_beta));
+	
+	// 2. p = r + beta * ( p - omega * v)
+	{
+		action = CuCG::KernelCoefficient::beta_and_omega;
+		void* args[] = { &p, &r, &p, &v, &N, &action };
+		graph.add_kernel_node(threads, blocks, CuCG::vector_add_2vectors, args);
+	}
+
+	// 3. v = Ap
+	{
+		void* args[] = { &v, &A, &p, &N };
+		graph.add_kernel_node(threads, blocks, CuCG::matrix_dot_vector, args);
+	}
+
+	// 4. alpha = rs_new / (r_hat * v)
+	graph.add_graph_as_node(CR.make_graph(r_hat, v, false, CuCG::ExtraAction::compute_alpha));
+
+	// 5. s = r - alpha * v
+	{ 
+		action = CuCG::KernelCoefficient::alpha;
+		void* args[] = { &s, &r, &v, &N, &action };
+		graph.add_kernel_node(threads, blocks, CuCG::vector_minus_vector, args);
+	}
+
+	// 6. t = A * s
+	{
+		void* args[] = { &t, &A, &s, &N };
+		graph.add_kernel_node(threads, blocks, CuCG::matrix_dot_vector, args);
+	}
+
+	// 7. omega = (t * s) / (t * t)
+	graph.add_graph_as_node(CR.make_graph(t, s, false, CuCG::ExtraAction::compute_buffer));
+	graph.add_graph_as_node(CR.make_graph(t, t, false, CuCG::ExtraAction::compute_omega));
+
+	// 8. x = x + alpha * p + omega * s
+	{
+		action = CuCG::KernelCoefficient::alpha_and_omega;
+		void* args[] = { &x, &x, &p, &s, &N, &action };
+		graph.add_kernel_node(threads, blocks, CuCG::vector_add_2vectors, args);
+	}
+
+	// 9. r = s - omega * t
+	{
+		action = CuCG::KernelCoefficient::omega;
+		void* args[] = { &r, &s, &t, &N, &action };
+		graph.add_kernel_node(threads, blocks, CuCG::vector_minus_vector, args);
+	}
+
+	graph.instantiate();
+	while (true)
+	{
+		k++;	if (k > 1000000) break;
+
+		graph.launch();
+
+
+		// check exit by r^2
+		if (k < 20 || k % 50 == 0)
+		{
+			rs_host = CR.reduce(r, r, true, CuCG::ExtraAction::NONE);
+			if (k > 100000) break;
+			//if (abs(rs_host) < eps) break;
+		}
+
+		//if (k == 20000) break;
+		if (k % 1000 == 0) cout << k << " " << abs(rs_host) << endl;
+	}
+
+	cout << k << " " << abs(rs_host) << endl;
 }

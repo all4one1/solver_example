@@ -46,6 +46,9 @@
     <ClInclude Include="ReductionModified.cuh">
       <Filter>CuCG</Filter>
     </ClInclude>
+    <ClInclude Include="CuGraph.h">
+      <Filter>CuCG</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Sparse">

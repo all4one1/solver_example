@@ -74,6 +74,7 @@
     </Link>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
+      <CodeGeneration>compute_75,sm_75</CodeGeneration>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -86,6 +87,7 @@
     <ClInclude Include="CPUsolver.h" />
     <ClInclude Include="Extras.h" />
     <ClInclude Include="FromOuterSparse\SparseMatrix.h" />
+    <ClInclude Include="CuGraph.h" />
     <ClInclude Include="ReductionModified.cuh" />
     <ClInclude Include="Header.h" />
     <ClInclude Include="CuCG.h" />
