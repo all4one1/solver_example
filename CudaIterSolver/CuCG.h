@@ -377,7 +377,75 @@ struct BiCGSTAB
 		CR = new CuCG::CudaReductionM(N, reduction_threads);
 		make_graph(x, x0, b, A);
 	}
+	void solve_directly(double* x, double* x0, double* b, SparseMatrixCuda& A)
+	{
+		double rs_host = 1;  k = 0;
+		cudaMemset(x, 0, Nbytes);
 
+		// r = b - Ax
+		KERNEL(CuCG::vector_minus_matrix_dot_vector)(r, b, A, x, N);
+		// r_hat = r
+		KERNEL(CuCG::vector_set_to_vector)(r_hat, r, N);
+		// p = r
+		KERNEL(CuCG::vector_set_to_vector)(p, r, N);
+
+		// rs = r_hat * r
+		CR->reduce(r_hat, r, true, CuCG::ExtraAction::compute_rs_old);
+
+		auto single_iteration = [&]()
+		{
+
+			// rs_new = r_hat * r; 		// beta =  (rs_new / rs_old) * (alpha / omega)		// rs_old = rs_new
+			CR->reduce(r_hat, r, false, CuCG::ExtraAction::compute_rs_new_and_beta);
+
+			// p = r + beta * ( p - omega * v)
+			KERNEL(CuCG::vector_add_2vectors)(p, r, p, v, N, CuCG::KernelCoefficient::beta_and_omega);
+
+			// v = Ap
+			KERNEL(CuCG::matrix_dot_vector)(v, A, p, N);
+
+			// alpha = rs_new / (r_hat * v)
+			CR->reduce(r_hat, v, false, CuCG::ExtraAction::compute_alpha);
+
+			// s = r - alpha * v
+			KERNEL(CuCG::vector_minus_vector)(s, r, v, N, CuCG::KernelCoefficient::alpha);
+
+			// t = A * s
+			KERNEL(CuCG::matrix_dot_vector)(t, A, s, N);
+
+			// omega = (t * s) / (t * t)
+
+			CR->reduce(t, s, false, CuCG::ExtraAction::compute_buffer);
+			CR->reduce(t, t, false, CuCG::ExtraAction::compute_omega);
+
+			// x = x + alpha * p + omega * s
+			KERNEL(CuCG::vector_add_2vectors)(x, x, p, s, N, CuCG::KernelCoefficient::alpha_and_omega);
+
+			// r = s - omega * t
+			KERNEL(CuCG::vector_minus_vector)(r, s, t, N, CuCG::KernelCoefficient::omega);
+		};
+
+
+		while (true)
+		{
+			k++;	if (k > 1000000) break;
+
+			single_iteration();
+
+			// check exit by r^2
+			if (k < 20 || k % 50 == 0)
+			{
+				rs_host = CR->reduce(r, r, true, CuCG::ExtraAction::NONE);
+				//if (k > 100000) break;
+				if (abs(rs_host) < eps) break;
+			}
+
+			//if (k == 20000) break;
+			if (k % 1000 == 0) cout << k << " " << abs(rs_host) << endl;
+		}
+
+		cout << k << " " << abs(rs_host) << endl;
+	}
 	void make_graph(double* x, double* x0, double* b, SparseMatrixCuda& A)
 	{
 		CuCG::KernelCoefficient action;
@@ -457,77 +525,8 @@ struct BiCGSTAB
 			if (k < 20 || k % 50 == 0)
 			{
 				rs_host = CR->reduce(r, r, true, CuCG::ExtraAction::NONE);
-				if (k > 100000) break;
-				//if (abs(rs_host) < eps) break;
-			}
-
-			//if (k == 20000) break;
-			if (k % 1000 == 0) cout << k << " " << abs(rs_host) << endl;
-		}
-
-		cout << k << " " << abs(rs_host) << endl;
-	}
-	void solve_directly(double* x, double* x0, double* b, SparseMatrixCuda& A)
-	{
-		double rs_host = 1;  k = 0;
-		cudaMemset(x, 0, Nbytes);
-
-		// r = b - Ax
-		KERNEL(CuCG::vector_minus_matrix_dot_vector)(r, b, A, x, N);
-		// r_hat = r
-		KERNEL(CuCG::vector_set_to_vector)(r_hat, r, N);
-		// p = r
-		KERNEL(CuCG::vector_set_to_vector)(p, r, N);
-
-		// rs = r_hat * r
-		CR->reduce(r_hat, r, true, CuCG::ExtraAction::compute_rs_old);
-
-		auto single_iteration = [&]()
-		{
-
-			// rs_new = r_hat * r; 		// beta =  (rs_new / rs_old) * (alpha / omega)		// rs_old = rs_new
-			CR->reduce(r_hat, r, false, CuCG::ExtraAction::compute_rs_new_and_beta);
-
-			// p = r + beta * ( p - omega * v)
-			KERNEL(CuCG::vector_add_2vectors)(p, r, p, v, N, CuCG::KernelCoefficient::beta_and_omega);
-
-			// v = Ap
-			KERNEL(CuCG::matrix_dot_vector)(v, A, p, N);
-
-			// alpha = rs_new / (r_hat * v)
-			CR->reduce(r_hat, v, false, CuCG::ExtraAction::compute_alpha);
-
-			// s = r - alpha * v
-			KERNEL(CuCG::vector_minus_vector)(s, r, v, N, CuCG::KernelCoefficient::alpha);
-
-			// t = A * s
-			KERNEL(CuCG::matrix_dot_vector)(t, A, s, N);
-
-			// omega = (t * s) / (t * t)
-
-			CR->reduce(t, s, false, CuCG::ExtraAction::compute_buffer);
-			CR->reduce(t, t, false, CuCG::ExtraAction::compute_omega);
-
-			// x = x + alpha * p + omega * s
-			KERNEL(CuCG::vector_add_2vectors)(x, x, p, s, N, CuCG::KernelCoefficient::alpha_and_omega);
-
-			// r = s - omega * t
-			KERNEL(CuCG::vector_minus_vector)(r, s, t, N, CuCG::KernelCoefficient::omega);
-		};
-
-
-		while (true)
-		{
-			k++;	if (k > 1000000) break;
-
-			single_iteration();
-
-			// check exit by r^2
-			if (k < 20 || k % 50 == 0)
-			{
-				rs_host = CR->reduce(r, r, true, CuCG::ExtraAction::NONE);
-				if (k > 100000) break;
-				//if (abs(rs_host) < eps) break;
+				//if (k > 100000) break;
+				if (abs(rs_host) < eps) break;
 			}
 
 			//if (k == 20000) break;

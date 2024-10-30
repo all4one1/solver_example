@@ -167,7 +167,7 @@ void BICGSTAB(unsigned int N, double* x, double* x0, double* b, SparseMatrix& A)
 	mathsolver::vector_copy_into_vector(r, p, N); // p = r
 	mathsolver::vector_dot_vector(r_hat, r, rs_old, N); // res = r_hat * r
 
-	double eps = 1e-8;
+	double eps = 1e-6;
 	unsigned int k = 0;
 	while (true)
 	{
@@ -203,8 +203,9 @@ void BICGSTAB(unsigned int N, double* x, double* x0, double* b, SparseMatrix& A)
 		{
 			break;
 		}
-		if (k % 1000 == 0) cout << k << " " << abs(buffer) << endl;
+		//if (k > 100000) break;
+		if (k % 1000 == 0) cout << "k = " << k << " " << abs(buffer) << endl;
 	}
 
-	cout << k << " " << abs(buffer) << endl;
+	//cout << "k = " << k << " " << abs(buffer) << endl;
 }
